@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
+<meta name="robots" content="noindex" />
+<title>Test build</title>
+<style>
+  html,body{height:100%;margin:0;background:#0d1014;color:#9aa7b4;font:15px/1.5 ui-monospace,"SF Mono",Menlo,Consolas,monospace}
+  main{min-height:100%;display:grid;place-items:center;padding:24px;box-sizing:border-box;text-align:center}
+  h1{font-size:13px;letter-spacing:.18em;text-transform:uppercase;color:#7d8b99;margin:0 0 12px}
+  a{color:#4fd1d9}
+  ul{list-style:none;padding:0;margin:16px 0 0;text-align:left;display:inline-block}
+  li{margin:6px 0}
+  .err{color:#ff8a80}
+</style>
+</head>
+<body><main><div><h1>Corporate Survivors · test build</h1><div id="m">loading…</div></div></main>
+<script>
+(async () => {
+  const BASE = '/cs-builds/'
+  const m = document.getElementById('m')
+  const say = (html, cls) => { m.innerHTML = html; m.className = cls || '' }
+  try {
+    // 1. the key: from the link's #fragment (never sent to the server), else remembered from before
+    const frag = new URLSearchParams(location.hash.replace(/^#/, ''))
+    if (frag.get('k')) localStorage.setItem('cs-test-key', frag.get('k'))
+    const key = localStorage.getItem('cs-test-key')
+    if (!key) return say('No key on this device. Open the <b>Play this build</b> link from the pull request comment.', 'err')
+    if (!('serviceWorker' in navigator)) return say('This browser cannot run service workers, so it cannot decrypt the build. Use Chrome, Safari or Firefox.', 'err')
+
+    // 2. where are we? <base><branch>/play/<file>
+    const rel = location.pathname.startsWith(BASE) ? location.pathname.slice(BASE.length) : ''
+    const i = rel.indexOf('/play/')
+    const branch = i > 0 ? rel.slice(0, i) : ''
+
+    // 3. hand the key to the service worker
+    const reg = await navigator.serviceWorker.register(BASE + 'sw.js', { scope: BASE })
+    await navigator.serviceWorker.ready
+    const sw = reg.active || reg.waiting || reg.installing
+    await new Promise((res, rej) => {
+      const ch = new MessageChannel()
+      ch.port1.onmessage = (e) => e.data === 'ok' ? res() : rej(new Error('worker refused the key'))
+      sw.postMessage({ type: 'key', key }, [ch.port2])
+      setTimeout(() => rej(new Error('the service worker did not answer')), 8000)
+    })
+
+    if (branch) {
+      // A /play/ link: the worker now owns this path. If it already controlled this page and we
+      // still landed here, it could not serve the build — do not loop.
+      if (navigator.serviceWorker.controller && sessionStorage.getItem('cs-reloaded') === location.pathname)
+        return say('The build could not be opened (wrong key, or not deployed yet). <a href="">Try again</a>.', 'err')
+      sessionStorage.setItem('cs-reloaded', location.pathname)
+      say('decrypting…')
+      location.reload()
+      return
+    }
+
+    // 4. the root page: list the builds
+    const r = await fetch(BASE + 'builds.json', { cache: 'no-store' })
+    const builds = r.ok ? await r.json() : {}
+    const names = Object.keys(builds).sort((a, b) => (builds[b].at || '').localeCompare(builds[a].at || ''))
+    if (!names.length) return say('No builds deployed yet.')
+    say('Builds (newest first):<ul>' + names.map(n =>
+      `<li><a href="${BASE}${n}/play/">${n}</a> <small>${(builds[n].at || '').slice(0, 16).replace('T', ' ')}${builds[n].sha ? ' · ' + builds[n].sha.slice(0, 7) : ''}</small></li>`).join('') + '</ul>')
+  } catch (e) { say('Could not start: ' + (e && e.message || e), 'err') }
+})()
+</script>
+</body>
+</html>
